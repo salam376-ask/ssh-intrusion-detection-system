@@ -4,11 +4,12 @@ from collections import defaultdict
 from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
+import os  # 👈 Added this to interact with the Linux Firewall
 
 def send_email(alert_message):
     sender = "khanabdussalam727@gmail.com"
     receiver = "khanabdussalam727@gmail.com"
-    password = "okfkbzyvpypzpthg"   # Replace this with your Google App Password later
+    password = "czhckfecffdskwnx"   
     msg = MIMEText(alert_message)
     msg["Subject"] = "🚨 HIGH ALERT: SSH Brute Force Detected"
     msg["From"] = sender
@@ -23,11 +24,11 @@ def send_email(alert_message):
     except Exception as e:
         print("❌ Email Error:", e)
 
-print("🔵 SOC SSH MONITOR STARTED...\n")
+print("🔵 SOC SSH MONITOR STARTED (IPS MODE ACTIVE)...\n")
 failed_attempts = defaultdict(int)
 alerted_ips = set()
+blocked_ips = set()  # 👈 Keeps track of who we already banned
 
-# Ingesting live systemd logs for the SSH daemon service
 process = subprocess.Popen(
     ["journalctl", "-u", "ssh", "-f"],
     stdout=subprocess.PIPE,
@@ -41,7 +42,6 @@ for line in process.stdout:
         failed_attempts[ip] += 1
         count = failed_attempts[ip]
         
-        # Categorizing threat mitigation priority levels
         if count >= 5:
             severity = "HIGH"
         elif count >= 3:
@@ -58,10 +58,18 @@ for line in process.stdout:
         print(alert_message)
         print("="*60)
         
-        # Writing alerts out to local disk database for SIEM parsing
         with open("alerts.log", "a") as f:
             f.write(alert_message + "\n")
             
-        if severity == "HIGH" and ip not in alerted_ips:
-            send_email(alert_message)
-            alerted_ips.add(ip)
+        # 🛡️ ACTIVE DEFENSE ZONE 🛡️
+        if severity == "HIGH":
+            # 1. Trigger automated firewall rule blocking
+            if ip not in blocked_ips and ip != "Unknown" and ip != "::1" and ip != "127.0.0.1":
+                os.system(f"sudo iptables -A INPUT -s {ip} -j DROP")
+                print(f"🛑 IPS ACTION: IP {ip} has been permanently dropped by iptables firewall!")
+                blocked_ips.add(ip)
+            
+            # 2. Trigger administrative notification email
+            if ip not in alerted_ips:
+                send_email(alert_message)
+                alerted_ips.add(ip)
