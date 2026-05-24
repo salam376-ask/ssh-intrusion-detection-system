@@ -1,75 +1,66 @@
-import subprocess
-import re
-from collections import defaultdict
-from datetime import datetime
-import smtplib
-from email.mime.text import MIMEText
-import os  # 👈 Added this to interact with the Linux Firewall
+kfrom flask import Flask, render_template_string
+import sqlite3
+app = Flask(__name__)
 
-def send_email(alert_message):
-    sender = "khanabdussalam727@gmail.com"
-    receiver = "khanabdussalam727@gmail.com"
-    password = "czhckfecffdskwnx"   
-    msg = MIMEText(alert_message)
-    msg["Subject"] = "🚨 HIGH ALERT: SSH Brute Force Detected"
-    msg["From"] = sender
-    msg["To"] = receiver
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SOC SQL Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f111a; color: #a6accd; margin: 0; padding: 20px; }
+        h1 { text-align: center; color: #00d2ff; text-shadow: 0 0 10px rgba(0,210,255,0.3); }
+        .container { max-width: 1200px; margin: auto; }
+        table { width: 100%; border-collapse: collapse; background: #151824; margin-top: 20px; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 14px; text-align: center; border-bottom: 1px solid #23283d; }
+        th { background: #1e2235; color: #00d2ff; font-weight: 600; }
+        .LOW { background-color: rgba(241, 196, 15, 0.15); color: #f1c40f; }
+        .MEDIUM { background-color: rgba(230, 126, 34, 0.15); color: #e67e22; }
+        .HIGH { background-color: rgba(231, 76, 60, 0.2); color: #e74c3c; font-weight: bold; animation: pulse 2s infinite; }
+        @keyframes pulse { 50% { background-color: rgba(231, 76, 60, 0.4); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔵 SOC Advanced Database SIEM</h1>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Timestamp</th>
+                <th>Source IP Address</th>
+                <th>Attempt Count</th>
+                <th>Severity Level</th>
+                <th>Raw Security Logs</th>
+            </tr>
+            {% for log in logs %}
+            <tr class="{{log[2]}}">
+                <td>{{log[0]}}</td>
+                <td>{{log[1]}}</td>
+                <td>{{log[3]}}</td>
+                <td>{{log[4]}}</td>
+                <td><strong>{{log[2]}}</strong></td>
+                <td style="text-align: left; font-size: 12px; font-family: monospace;">{{log[5]}}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    logs = []
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(sender, password)
-        server.send_message(msg)
-        server.quit()
-        print("📧 Email Alert Sent!")
+        conn = sqlite3.connect("soc_data.db")
+        cursor = conn.cursor()
+        # Querying the database directly for clean structured sorting
+        cursor.execute("SELECT id, timestamp, severity, ip_address, attempt_count, raw_log FROM ssh_alerts ORDER BY id DESC LIMIT 50")
+        logs = cursor.fetchall()
+        conn.close()
     except Exception as e:
-        print("❌ Email Error:", e)
+        print("Database Error:", e)
+    return render_template_string(HTML_TEMPLATE, logs=logs)
 
-print("🔵 SOC SSH MONITOR STARTED (IPS MODE ACTIVE)...\n")
-failed_attempts = defaultdict(int)
-alerted_ips = set()
-blocked_ips = set()  # 👈 Keeps track of who we already banned
-
-process = subprocess.Popen(
-    ["journalctl", "-u", "ssh", "-f"],
-    stdout=subprocess.PIPE,
-    text=True
-)
-
-for line in process.stdout:
-    if "Failed password" in line:
-        ip_match = re.search(r'from (.*?) port', line)
-        ip = ip_match.group(1) if ip_match else "Unknown"
-        failed_attempts[ip] += 1
-        count = failed_attempts[ip]
-        
-        if count >= 5:
-            severity = "HIGH"
-        elif count >= 3:
-            severity = "MEDIUM"
-        else:
-            severity = "LOW"
-            
-        time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        alert_message = (
-            f"[{time_now}] | {severity} ALERT | "
-            f"IP: {ip} | Attempts: {count} | {line.strip()}"
-        )
-        print("\n" + "="*60)
-        print(alert_message)
-        print("="*60)
-        
-        with open("alerts.log", "a") as f:
-            f.write(alert_message + "\n")
-            
-        # 🛡️ ACTIVE DEFENSE ZONE 🛡️
-        if severity == "HIGH":
-            # 1. Trigger automated firewall rule blocking
-            if ip not in blocked_ips and ip != "Unknown" and ip != "::1" and ip != "127.0.0.1":
-                os.system(f"sudo iptables -A INPUT -s {ip} -j DROP")
-                print(f"🛑 IPS ACTION: IP {ip} has been permanently dropped by iptables firewall!")
-                blocked_ips.add(ip)
-            
-            # 2. Trigger administrative notification email
-            if ip not in alerted_ips:
-                send_email(alert_message)
-                alerted_ips.add(ip)
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0")
